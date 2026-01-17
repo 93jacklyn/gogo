@@ -3,73 +3,91 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>工班雲端排程系統</title>
+    <title>工班排程 - 強效雲端版</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 使用穩定相容版 SDK -->
+    <!-- 使用穩定 CDN 版本 -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-    
     <style>
         body { font-family: -apple-system, "Microsoft JhengHei", sans-serif; background-color: #f1f5f9; margin: 0; }
-        #calendar-container { display: flex; overflow-x: auto; height: calc(100vh - 70px); padding: 15px; gap: 15px; }
-        @media (max-width: 767px) {
-            #calendar-container { flex-direction: column; overflow-y: auto; height: auto; padding-bottom: 100px; }
-            .day-column { min-height: 150px; }
-        }
         .day-column { min-width: 300px; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; display: flex; flex-direction: column; shrink-0; }
-        .task-card { border-left: 5px solid #3b82f6; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 8px; border: 1px solid #f1f5f9; position: relative; }
-        #loading-overlay { position: fixed; inset: 0; background: white; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .task-card { border-left: 5px solid #3b82f6; background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 8px; position: relative; border: 1px solid #f1f5f9; }
+        #loading-overlay { position: fixed; inset: 0; background: #ffffff; z-index: 999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: bold; }
+        .status-online { background: #dcfce7; color: #166534; }
+        .status-waiting { background: #fef9c3; color: #854d0e; }
+        .status-error { background: #fee2e2; color: #991b1b; }
     </style>
 </head>
 <body class="h-screen flex flex-col text-slate-800">
 
-    <!-- 載入動畫與診斷 -->
+    <!-- 啟動診斷畫面 -->
     <div id="loading-overlay">
-        <div id="spinner" class="animate-spin text-4xl mb-4">🌀</div>
-        <p id="msg" class="font-bold text-slate-500">正在同步雲端資料...</p>
-        <div id="err-box" class="mt-8 p-6 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm hidden max-w-sm shadow-lg">
-            <p class="font-bold text-lg mb-2">❌ 連線遭拒</p>
-            <div id="err-detail" class="font-mono bg-white p-3 border rounded-lg mb-4 text-xs"></div>
-            <p><b>解決方法：</b><br>請到 Firebase > Firestore > Rules，確認內容有 <code>allow read, write: if true;</code> 並點擊「發布」。</p>
+        <div class="animate-spin text-5xl mb-6">🔄</div>
+        <h2 class="text-xl font-bold text-slate-700 mb-2">雲端連線中</h2>
+        <div id="debug-log" class="text-[12px] text-slate-400 font-mono w-64 text-left space-y-1">
+            <p>1. 正在初始化系統...</p>
+        </div>
+        
+        <div id="retry-box" class="mt-8 hidden p-6 bg-red-50 border border-red-200 rounded-2xl max-w-sm text-center">
+            <p class="text-red-700 font-bold mb-2">⚠️ 連線超時</p>
+            <p class="text-xs text-slate-500 mb-4">請確認 Firebase > Firestore > Rules 是否已經「發布」為 allow read, write: if true;</p>
+            <button onclick="location.reload()" class="bg-red-600 text-white px-6 py-2 rounded-xl font-bold text-sm shadow-lg">重新整理網頁</button>
         </div>
     </div>
 
+    <!-- 導覽列 -->
     <header class="bg-slate-900 text-white p-3 shadow-lg flex justify-between items-center h-[70px] shrink-0">
-        <div class="flex items-center gap-2">
-            <div class="bg-blue-600 p-1.5 rounded-lg text-xl">🚚</div>
-            <h1 class="font-bold tracking-tight">雲端智慧排程</h1>
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg text-xl shadow-inner">🚚</div>
+            <div>
+                <h1 class="font-bold">雲端智慧排程</h1>
+                <div id="conn-badge" class="status-badge status-waiting">正在連線...</div>
+            </div>
         </div>
         <div class="flex gap-2">
             <button onclick="shiftDate(-1)" class="bg-slate-800 px-3 py-1 rounded">◀</button>
             <button onclick="shiftDate(1)" class="bg-slate-800 px-3 py-1 rounded">▶</button>
-            <button onclick="openModal()" class="bg-green-600 px-4 py-2 rounded-lg font-bold shadow text-sm">⚡ 匯入</button>
+            <button onclick="openModal()" class="bg-green-600 px-4 py-1 rounded font-bold text-sm shadow-md">⚡ 匯入</button>
         </div>
     </header>
 
+    <!-- 行程表 -->
     <main class="flex-1 overflow-hidden relative">
-        <div id="calendar-container"></div>
+        <div id="calendar-container" class="flex overflow-x-auto h-full p-4 gap-4 md:items-start items-stretch">
+            <!-- 由 JS 填充 -->
+        </div>
     </main>
 
     <!-- 匯入視窗 -->
-    <div id="modal-overlay" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+    <div id="modal-overlay" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
         <div class="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
-            <h3 class="text-xl font-bold text-slate-800 mb-4">智慧地址匯入</h3>
+            <h3 class="text-xl font-bold mb-4">批次排程匯入</h3>
             <div class="grid grid-cols-2 gap-4 mb-4">
-                <input type="date" id="start-date-input" class="w-full border p-2.5 rounded-xl bg-slate-50 outline-none">
-                <select id="daily-limit" class="w-full border p-2.5 rounded-xl bg-slate-50 outline-none">
+                <input type="date" id="start-date-input" class="w-full border p-3 rounded-xl bg-slate-50">
+                <select id="daily-limit" class="w-full border p-3 rounded-xl bg-slate-50">
                     <option value="3" selected>每人每日 3 單</option>
                     <option value="4">每人每日 4 單</option>
                 </select>
             </div>
-            <textarea id="import-text" class="w-full h-44 border p-4 rounded-2xl text-sm bg-slate-50 outline-none mb-4 focus:ring-2 focus:ring-blue-200" placeholder="貼上多筆地址清單..."></textarea>
+            <textarea id="import-text" class="w-full h-40 border p-4 rounded-2xl text-sm bg-slate-50 outline-none mb-4" placeholder="請貼上地址清單..."></textarea>
             <div class="flex gap-2">
-                <button onclick="closeModal()" class="flex-1 py-3 text-slate-400 font-bold">取消</button>
-                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-xl shadow-xl">開始同步 🚀</button>
+                <button onclick="closeModal()" class="flex-1 py-3 font-bold text-slate-400">取消</button>
+                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-2xl shadow-lg">開始運算同步 🚀</button>
             </div>
         </div>
     </div>
 
     <script>
+        function log(msg) {
+            const div = document.getElementById('debug-log');
+            const p = document.createElement('p');
+            p.innerText = msg;
+            div.appendChild(p);
+        }
+
+        // --- 填入您的正確金鑰 ---
         const firebaseConfig = {
             apiKey: "AIzaSyCun0bs243HrcEWlDlXPUAxYsCCqTQwQBE",
             authDomain: "gogogo-c442b.firebaseapp.com",
@@ -79,40 +97,61 @@
             appId: "1:616223737375:web:24d6d220c6150739ca372a"
         };
 
+        let db;
         try {
             firebase.initializeApp(firebaseConfig);
-            var db = firebase.firestore();
-        } catch (e) { console.error(e); }
+            db = firebase.firestore();
+            log("2. 載入 Firebase 完成");
+            
+            // 啟用匿名認證以繞過安全限制
+            firebase.auth().signInAnonymously().then(() => {
+                log("3. 雲端認證成功");
+                startListening();
+            }).catch(err => {
+                log("Error: 請在 Firebase 啟用匿名登入");
+            });
+        } catch (e) {
+            log("Error: 金鑰設定錯誤");
+        }
 
         const MASTERS = [
             { id: 1, name: '陳師傅', keywords: ['水電','漏水','燈','電'], color: 'border-blue-500' },
             { id: 2, name: '林師傅', keywords: ['木','裝潢','櫃'], color: 'border-orange-500' },
             { id: 3, name: '張師傅', keywords: ['油漆','粉刷','漆'], color: 'border-green-500' },
             { id: 4, name: '王師傅', keywords: ['泥','磚','水','浴'], color: 'border-stone-500' },
-            { id: 5, name: '李師傅', keywords: [], color: 'border-purple-500' },
+            { id: 5, name: '李師傅', keywords: [], color: 'border-purple-500' }
         ];
 
         let projects = [];
         let viewStartDate = new Date().toISOString().split('T')[0];
 
-        window.onload = function() {
-            document.getElementById('start-date-input').value = viewStartDate;
-            if(db) {
-                db.collection("tasks").onSnapshot(function(snapshot) {
-                    projects = [];
-                    snapshot.forEach(function(doc) {
-                        projects.push(Object.assign({ docId: doc.id }, doc.data()));
-                    });
-                    document.getElementById('loading-overlay').style.display = 'none';
-                    renderCalendar();
-                }, function(err) {
-                    document.getElementById('spinner').style.display = 'none';
-                    document.getElementById('msg').innerHTML = `<span class="text-red-500">連線失敗</span>`;
-                    document.getElementById('err-box').classList.remove('hidden');
-                    document.getElementById('err-detail').innerText = err.code + ": " + err.message;
-                });
+        // 超時偵測
+        const timeoutTimer = setTimeout(() => {
+            if (document.getElementById('loading-overlay').style.display !== 'none') {
+                document.getElementById('retry-box').classList.remove('hidden');
             }
-        };
+        }, 8000);
+
+        function startListening() {
+            log("4. 正在拉取雲端排程資料...");
+            db.collection("tasks").onSnapshot(function(snapshot) {
+                clearTimeout(timeoutTimer);
+                log("5. 資料獲取成功！正在進入畫面");
+                
+                projects = [];
+                snapshot.forEach(doc => projects.push(Object.assign({ docId: doc.id }, doc.data())));
+                
+                document.getElementById('loading-overlay').style.display = 'none';
+                document.getElementById('conn-badge').innerText = "雲端同步中";
+                document.getElementById('conn-badge').className = "status-badge status-online";
+                renderCalendar();
+            }, function(err) {
+                log("Error: " + err.code);
+                document.getElementById('conn-badge').innerText = "連線失敗";
+                document.getElementById('conn-badge').className = "status-badge status-error";
+                document.getElementById('retry-box').classList.remove('hidden');
+            });
+        }
 
         function renderCalendar() {
             const container = document.getElementById('calendar-container');
@@ -130,11 +169,12 @@
                 `;
                 container.appendChild(col);
                 const taskContainer = col.querySelector(`#tasks-${dateStr}`);
+                
                 MASTERS.forEach(master => {
                     const tasks = projects.filter(p => p.date === dateStr && p.masterId === master.id);
                     if (tasks.length > 0) {
                         const g = document.createElement('div');
-                        g.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 ml-1 uppercase">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="text-blue-500 ml-2">導航</button></div>`;
+                        g.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 ml-1 uppercase">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="text-blue-500 font-bold ml-2">導航</button></div>`;
                         tasks.forEach(t => {
                             g.innerHTML += `
                                 <div class="task-card ${master.color}">
@@ -145,36 +185,8 @@
                         taskContainer.appendChild(g);
                     }
                 });
-                if(projects.filter(p=>p.date===dateStr).length === 0) taskContainer.innerHTML = '<div class="py-10 text-center text-slate-200 text-sm">無行程</div>';
+                if(projects.filter(p=>p.date===dateStr).length === 0) taskContainer.innerHTML = '<div class="py-10 text-center text-slate-200 text-sm">暫無行程</div>';
             }
         }
 
         function runAutoSchedule() {
-            const text = document.getElementById('import-text').value;
-            const limit = parseInt(document.getElementById('daily-limit').value);
-            const startD = document.getElementById('start-date-input').value;
-            if (!text.trim()) return alert('請貼上內容');
-            const lines = text.split('\n').filter(l => l.trim() !== '');
-            const batch = db.batch();
-            let temp = JSON.parse(JSON.stringify(projects));
-            lines.forEach(line => {
-                let mId = 5;
-                for (let m of MASTERS) { if (m.keywords.some(k => line.includes(k))) { mId = m.id; break; } }
-                let day = 0;
-                while(true) {
-                    const d = addDays(startD, day);
-                    if(temp.filter(p => p.date === d && p.masterId === mId).length < limit) {
-                        const ref = db.collection("tasks").doc();
-                        const t = { rawText: line, masterId: mId, date: d };
-                        batch.set(ref, t);
-                        temp.push(t);
-                        break;
-                    }
-                    day++;
-                    if(day > 30) break;
-                }
-            });
-            batch.commit().then(function() { closeModal(); document.getElementById('import-text').value = ''; });
-        }
-
-        function deleteTask(id)
