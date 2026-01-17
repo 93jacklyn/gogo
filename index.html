@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>工班雲端排程系統</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    
+    <style>
+        body { font-family: -apple-system, "Microsoft JhengHei", sans-serif; background-color: #f8fafc; margin: 0; }
+        
+        /* RWD 設定 */
+        @media (min-width: 768px) {
+            #calendar-container {
+                display: flex; flex-direction: row; overflow-x: auto;
+                height: calc(100vh - 70px); padding: 20px; gap: 20px; align-items: flex-start;
+            }
+            .day-column { min-width: 320px; max-width: 320px; height: 100%; }
+        }
+        @media (max-width: 767px) {
+            #calendar-container {
+                display: flex; flex-direction: column; padding: 10px; gap: 15px; padding-bottom: 80px;
+            }
+            .day-column { width: 100%; height: auto; min-height: 150px; }
+        }
+
+        .day-column { background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); display: flex; flex-direction: column; border: 1px solid #e2e8f0; }
+        .task-card { background: white; border-left-width: 5px; padding: 12px; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 8px; border: 1px solid #f1f5f9; position: relative; }
+        .area-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #e2e8f0; color: #475569; font-weight: bold; margin-bottom: 4px; display: inline-block; }
+        
+        #modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 50; justify-content: center; align-items: center; backdrop-filter: blur(2px); }
+        #modal-overlay.show { display: flex; }
+        
+        /* 連線燈號 */
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; display: inline-block; margin-right: 4px; }
+        .status-dot.online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-slate-800">
+
+    <!-- 頂部導航 -->
+    <header class="bg-slate-900 text-white p-3 shadow-lg flex justify-between items-center shrink-0 z-20 h-[70px]">
+        <div class="flex items-center gap-2">
+            <div class="bg-blue-600 p-1.5 rounded text-xl">☁️</div>
+            <div>
+                <h1 class="font-bold text-lg tracking-wide">工班排程</h1>
+                <div class="flex items-center text-[10px] text-slate-400">
+                    <span id="status-dot" class="status-dot"></span>
+                    <span id="status-text">連線中...</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-3">
+            <div class="flex bg-slate-800 rounded-lg p-1 border border-slate-700">
+                <button onclick="shiftDate(-1)" class="px-3 py-1 hover:bg-slate-700 rounded text-white font-bold transition">◀</button>
+                <button onclick="shiftDate(1)" class="px-3 py-1 hover:bg-slate-700 rounded text-white font-bold transition">▶</button>
+            </div>
+            <button onclick="openModal()" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-bold shadow-lg transition active:scale-95 flex items-center gap-1">
+                <span>⚡</span> <span class="hidden md:inline">匯入</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主畫面 -->
+    <div class="flex-1 overflow-hidden w-full relative bg-slate-50">
+        <div id="calendar-container" class="w-full h-full overflow-y-auto md:overflow-y-hidden">
+            <!-- 內容由 JS 產生 -->
+            <div class="w-full h-full flex items-center justify-center text-slate-400">載入資料庫中...</div>
+        </div>
+    </div>
+
+    <!-- 匯入彈窗 -->
+    <div id="modal-overlay">
+        <div class="bg-white w-full max-w-lg rounded-2xl p-6 shadow-2xl m-4 animate-[bounce_0.2s]">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h3 class="text-xl font-bold text-slate-800">智慧分流匯入</h3>
+                <button onclick="closeModal()" class="text-3xl text-slate-300 hover:text-slate-500">×</button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 mb-1">開始排程日期</label>
+                    <input type="date" id="start-date-input" class="w-full border p-2 rounded bg-slate-50 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 mb-1">每日接單上限</label>
+                    <select id="daily-limit" class="w-full border p-2 rounded bg-slate-50 outline-none focus:border-blue-500">
+                        <option value="2">2 單 (輕鬆)</option>
+                        <option value="3" selected>3 單 (標準)</option>
+                        <option value="4">4 單 (忙碌)</option>
+                        <option value="5">5 單 (極限)</option>
+                    </select>
+                </div>
+            </div>
+
+            <textarea id="import-text" class="w-full h-40 border p-3 rounded-lg text-sm bg-slate-50 outline-none mb-4 focus:ring-2 focus:ring-blue-200 font-mono"
+                placeholder="直接貼上 Line 的地址...&#10;台北市信義區忠孝東路 (水電)&#10;新北市板橋區文化路 (木工)..."></textarea>
+
+            <button onclick="runAutoSchedule()" class="w-full py-3 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-slate-800 transition active:scale-95">
+                開始運算並同步到所有裝置 🚀
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 🔴 請將 Firebase Config 貼在下方大括號中
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyCun0bs243HrcEWlDlXPUAxYsCCqTQwQBE",
+  authDomain: "gogogo-c442b.firebaseapp.com",
+  projectId: "gogogo-c442b",
+  storageBucket: "gogogo-c442b.firebasestorage.app",
+  messagingSenderId: "616223737375",
+  appId: "1:616223737375:web:24d6d220c6150739ca372a",
+  measurementId: "G-NDGMT0F0MY"
+        };
+        // ==========================================
+
+        // 初始化 Firebase
+        let db;
+        if (firebaseConfig.projectId) {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+        } else {
+            alert("⚠️ 請打開 index.html 填入 Firebase 金鑰！");
+        }
+
+        const MASTERS = [
+            { id: 1, name: '陳師傅', type: '水電', keywords: ['水電','漏水','燈','電'], color: 'border-blue-500', btn: 'text-blue-600 bg-blue-50' },
+            { id: 2, name: '林師傅', type: '木工', keywords: ['木','裝潢','櫃'], color: 'border-orange-500', btn: 'text-orange-600 bg-orange-50' },
+            { id: 3, name: '張師傅', type: '油漆', keywords: ['油漆','粉刷','漆'], color: 'border-emerald-500', btn: 'text-emerald-600 bg-emerald-50' },
+            { id: 4, name: '王師傅', type: '泥作', keywords: ['泥','磚','水','浴'], color: 'border-stone-500', btn: 'text-stone-600 bg-stone-50' },
+            { id: 5, name: '李師傅', type: '全能', keywords: [], color: 'border-purple-500', btn: 'text-purple-600 bg-purple-50' },
+        ];
+
+        let projects = [];
+        let viewStartDate = new Date().toISOString().split('T')[0];
+
+        // 啟動監聽
+        window.onload = function() {
+            document.getElementById('start-date-input').value = viewStartDate;
+            if(db) {
+                db.collection("tasks").onSnapshot(snapshot => {
+                    projects = [];
+                    snapshot.forEach(doc => projects.push({ ...doc.data(), docId: doc.id }));
+                    renderCalendar();
+                    document.getElementById('status-dot').classList.add('online');
+                    document.getElementById('status-text').innerText = "已連線同步";
+                }, err => console.error(err));
+            }
+        };
+
+        // 渲染畫面
+        function renderCalendar() {
+            const container = document.getElementById('calendar-container');
+            container.innerHTML = '';
+
+            for (let i = 0; i < 5; i++) {
+                const dateStr = addDays(viewStartDate, i);
+                const dayName = getDayName(dateStr);
+                const dayCount = projects.filter(p => p.date === dateStr).length;
+
+                const col = document.createElement('div');
+                col.className = 'day-column shrink-0';
+                col.innerHTML = `
+                    <div class="p-3 border-b border-slate-100 bg-slate-50 rounded-t-xl flex justify-between items-center sticky top-0 bg-slate-50 z-10">
+                        <div>
+                            <span class="font-bold text-lg text-slate-800">${dateStr.slice(5)}</span>
+                            <span class="text-xs text-slate-500 font-bold uppercase ml-1">${dayName}</span>
+                        </div>
+                        <span class="text-xs bg-slate-200 text-slate-600 px-2 py-1 rounded-full font-bold">${dayCount} 件</span>
+                    </div>
+                    <div class="flex-1 p-2 space-y-3 overflow-y-auto" id="tasks-${dateStr}"></div>
+                `;
+                container.appendChild(col);
+                const taskContainer = col.querySelector(`#tasks-${dateStr}`);
+                
+                let hasTask = false;
+                MASTERS.forEach(master => {
+                    const tasks = projects.filter(p => p.date === dateStr && p.masterId === master.id);
+                    if (tasks.length > 0) {
+                        hasTask = true;
+                        const group = document.createElement('div');
+                        group.className = "mb-3";
+                        let html = `
+                            <div class="flex justify-between items-center mb-1 px-1">
+                                <span class="text-xs
