@@ -1,12 +1,13 @@
-<!DOCTYPE html>
+  <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>工班雲端排程_終極修復版</title>
+    <title>工班排程系統 - 強效連線版</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDK (使用穩定相容版) -->
+    <!-- Firebase SDK (穩定版) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     
     <style>
@@ -21,7 +22,7 @@
         }
         .day-column { background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; display: flex; flex-direction: column; }
         .task-card { border-left: 5px solid #3b82f6; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 10px; position: relative; border: 1px solid #f1f5f9; }
-        #modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; justify-content: center; align-items: center; backdrop-filter: blur(4px); }
+        #loading-screen { position: fixed; inset: 0; background: white; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; display: inline-block; margin-right: 6px; }
         .status-online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
         .status-error { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
@@ -29,14 +30,26 @@
 </head>
 <body class="h-screen flex flex-col text-slate-800">
 
+    <!-- 載入動畫層 -->
+    <div id="loading-screen">
+        <div id="loader-icon" class="animate-spin text-4xl mb-4 text-blue-500">🌀</div>
+        <p id="loader-text" class="font-bold text-slate-500 text-lg">正在嘗試同步雲端資料...</p>
+        <div id="timeout-box" class="mt-8 p-6 bg-amber-50 border border-amber-200 rounded-2xl hidden max-w-sm text-center">
+            <p class="text-amber-700 font-bold mb-2">⚠️ 連線時間過長</p>
+            <p class="text-xs text-amber-600 mb-4">這通常是因為 Firebase 規則 (Rules) 沒開，或是沒有啟用匿名登入。</p>
+            <button onclick="location.reload()" class="bg-amber-600 text-white px-4 py-2 rounded-lg font-bold text-sm">重新嘗試連線</button>
+        </div>
+    </div>
+
+    <!-- 頁首 -->
     <header class="bg-slate-900 text-white p-3 shadow-lg flex justify-between items-center h-[70px]">
         <div class="flex items-center gap-3">
             <div class="bg-blue-600 p-2 rounded-lg text-xl">☁️</div>
             <div>
-                <h1 class="font-bold text-lg">雲端智慧排程</h1>
+                <h1 class="font-bold text-lg leading-tight">雲端智慧排程</h1>
                 <div class="flex items-center text-[10px]">
                     <span id="status-dot" class="status-dot"></span>
-                    <span id="status-text">正在嘗試連線 Google...</span>
+                    <span id="status-text">連線中...</span>
                 </div>
             </div>
         </div>
@@ -48,54 +61,30 @@
     </header>
 
     <main class="flex-1 overflow-hidden relative bg-slate-50">
-        <!-- 診斷畫面 -->
-        <div id="loading-overlay" class="absolute inset-0 z-40 flex flex-col items-center justify-center bg-white p-6">
-            <div id="loader" class="animate-spin text-4xl mb-4 text-blue-500">🌀</div>
-            <div id="loading-msg" class="text-slate-500 font-bold text-center">正在同步雲端資料庫...</div>
-            
-            <!-- 錯誤說明框 -->
-            <div id="error-view" class="mt-8 p-6 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm hidden max-w-md shadow-xl">
-                <p class="font-bold text-lg mb-2 flex items-center gap-2">❌ 連線被 Google 拒絕</p>
-                <div id="error-raw" class="font-mono bg-white p-3 border rounded-lg mb-4 text-xs overflow-x-auto"></div>
-                <div class="space-y-3">
-                    <p><b>可能原因與解法：</b></p>
-                    <div class="p-3 bg-white rounded border border-red-100">
-                        <p class="font-bold text-blue-600">1. Rules 規則沒開</p>
-                        <p class="text-xs">請到 Firebase > Firestore > Rules，確認內容有 <code>allow read, write: if true;</code> 並且有點擊「發布」。</p>
-                    </div>
-                    <div class="p-3 bg-white rounded border border-red-100">
-                        <p class="font-bold text-blue-600">2. 資料庫沒建立</p>
-                        <p class="text-xs">請確認左邊選單點的是 <b>Cloud Firestore</b> (不是 Realtime DB)，且畫面上沒有出現「建立資料庫」按鈕。</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <div id="calendar-container"></div>
     </main>
 
     <!-- 匯入視窗 -->
-    <div id="modal-overlay" class="flex items-center justify-center">
-        <div class="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl m-4">
-            <h3 class="text-xl font-bold text-slate-800 mb-4">智慧分流匯入</h3>
+    <div id="modal-overlay" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
+            <h3 class="text-xl font-bold mb-4">智慧分流匯入</h3>
             <div class="grid grid-cols-2 gap-4 mb-4">
-                <input type="date" id="start-date-input" class="w-full border p-2.5 rounded-xl bg-slate-50 outline-none">
-                <select id="daily-limit" class="w-full border p-2.5 rounded-xl bg-slate-50 outline-none">
+                <input type="date" id="start-date-input" class="w-full border p-3 rounded-xl bg-slate-50">
+                <select id="daily-limit" class="w-full border p-3 rounded-xl bg-slate-50">
                     <option value="3" selected>每人每日 3 單</option>
                     <option value="4">每人每日 4 單</option>
                     <option value="5">每人每日 5 單</option>
                 </select>
             </div>
-            <textarea id="import-text" class="w-full h-44 border p-4 rounded-2xl text-sm bg-slate-50 outline-none mb-4" placeholder="貼上地址清單..."></textarea>
+            <textarea id="import-text" class="w-full h-44 border p-4 rounded-2xl text-sm bg-slate-50 outline-none mb-4" placeholder="貼上多筆地址清單..."></textarea>
             <div class="flex gap-2">
-                <button onclick="closeModal()" class="flex-1 py-3 text-slate-400 font-bold">取消</button>
-                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-xl shadow-xl">開始運算同步 🚀</button>
+                <button onclick="closeModal()" class="flex-1 py-3 font-bold text-slate-400">取消</button>
+                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-2xl">開始同步 🚀</button>
             </div>
         </div>
     </div>
 
     <script>
-        // 使用您的正確金鑰
         const firebaseConfig = {
             apiKey: "AIzaSyCun0bs243HrcEWlDlXPUAxYsCCqTQwQBE",
             authDomain: "gogogo-c442b.firebaseapp.com",
@@ -105,18 +94,35 @@
             appId: "1:616223737375:web:24d6d220c6150739ca372a"
         };
 
+        // 初始化
         let db;
         try {
             firebase.initializeApp(firebaseConfig);
             db = firebase.firestore();
-        } catch (e) { console.error("Firebase錯誤:", e); }
+            const auth = firebase.auth();
+            
+            // 強制執行匿名登入以確保連線穩定
+            auth.signInAnonymously().catch(e => console.error("Auth Error:", e));
+        } catch (e) {
+            document.getElementById('loader-text').innerText = "金鑰設定錯誤，請重新確認！";
+        }
+
+        // 超時偵測 (8秒)
+        setTimeout(() => {
+            const screen = document.getElementById('loading-screen');
+            if (screen.style.opacity !== '0') {
+                document.getElementById('loader-icon').classList.remove('animate-spin');
+                document.getElementById('timeout-box').classList.remove('hidden');
+                document.getElementById('loader-text').innerText = "連線失敗，請檢查後台設定";
+            }
+        }, 8000);
 
         const MASTERS = [
             { id: 1, name: '陳師傅', keywords: ['水電','漏水','燈','電'], color: 'border-blue-500' },
             { id: 2, name: '林師傅', keywords: ['木','裝潢','櫃'], color: 'border-orange-500' },
             { id: 3, name: '張師傅', keywords: ['油漆','粉刷','漆'], color: 'border-green-500' },
             { id: 4, name: '王師傅', keywords: ['泥','磚','水','浴'], color: 'border-stone-500' },
-            { id: 5, name: '李師傅', keywords: [], color: 'border-purple-500' },
+            { id: 5, name: '李師傅', keywords: [], color: 'border-purple-500' }
         ];
 
         let projects = [];
@@ -125,23 +131,23 @@
         window.onload = function() {
             document.getElementById('start-date-input').value = viewStartDate;
             if(db) {
-                // 嘗試讀取資料 (如果 Rules 沒開，這裡會報錯)
+                // 實時監聽
                 db.collection("tasks").onSnapshot(snapshot => {
                     projects = [];
                     snapshot.forEach(doc => projects.push({ ...doc.data(), docId: doc.id }));
                     
-                    document.getElementById('loading-overlay').style.display = 'none';
+                    // 關閉載入畫面
+                    const screen = document.getElementById('loading-screen');
+                    screen.style.opacity = '0';
+                    setTimeout(() => screen.style.display = 'none', 500);
+                    
                     document.getElementById('status-dot').className = 'status-dot status-online';
-                    document.getElementById('status-text').innerText = "雲端連線正常";
+                    document.getElementById('status-text').innerText = "雲端同步中";
                     renderCalendar();
                 }, err => {
-                    console.error("連線報錯:", err);
-                    document.getElementById('loader').style.display = 'none';
-                    document.getElementById('loading-msg').innerHTML = `<span class="text-red-500 font-bold text-xl">連線失敗</span>`;
-                    document.getElementById('error-view').classList.remove('hidden');
-                    document.getElementById('error-raw').innerText = err.code + ": " + err.message;
                     document.getElementById('status-dot').className = 'status-dot status-error';
-                    document.getElementById('status-text').innerText = "連線失敗";
+                    document.getElementById('status-text').innerText = "權限不足";
+                    alert("連線遭拒：請確認 Firebase Rules 已設為 allow read, write: if true;");
                 });
             }
         };
@@ -165,8 +171,10 @@
                 MASTERS.forEach(master => {
                     const tasks = projects.filter(p => p.date === dateStr && p.masterId === master.id);
                     if (tasks.length > 0) {
-                        const group = document.createElement('div');
-                        group.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 ml-1 uppercase">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="bg-white border px-2 py-0.5 rounded text-blue-600">導航</button></div>`;
+                        const g = document.createElement('div');
+                        g.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 uppercase">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="bg-white border px-2 py-0.5 rounded text-blue-600">導航</button></div>`;
                         tasks.forEach(t => {
-                            group.innerHTML += `
-                                <div cl
+                            g.innerHTML += `
+                                <div class="task-card ${master.color}">
+                                    <div class="text-sm font-bold text-slate-800">${t.rawText}</div>
+                                    <button onclick="deleteTask('${t.docId}')" class="absolute top-1 ri
