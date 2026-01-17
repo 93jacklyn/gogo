@@ -1,90 +1,79 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>工班排程系統 - 強效連線版</title>
+    <title>工班排程 - 最終修復版</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDK (穩定版) -->
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     
+    <!-- 使用最穩定的 Firebase 8 SDK，避免相容性問題 -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
     <style>
         body { font-family: -apple-system, "Microsoft JhengHei", sans-serif; background-color: #f1f5f9; margin: 0; }
-        @media (min-width: 768px) {
-            #calendar-container { display: flex; overflow-x: auto; height: calc(100vh - 70px); padding: 20px; gap: 20px; align-items: flex-start; }
-            .day-column { min-width: 310px; max-width: 310px; height: 100%; border-radius: 12px; }
-        }
+        #calendar-container { display: flex; overflow-x: auto; height: calc(100vh - 70px); padding: 15px; gap: 15px; }
         @media (max-width: 767px) {
-            #calendar-container { display: flex; flex-direction: column; padding: 10px; gap: 15px; padding-bottom: 80px; }
-            .day-column { width: 100%; min-height: 180px; }
+            #calendar-container { flex-direction: column; overflow-y: auto; height: auto; padding-bottom: 100px; }
         }
-        .day-column { background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; display: flex; flex-direction: column; }
-        .task-card { border-left: 5px solid #3b82f6; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 10px; position: relative; border: 1px solid #f1f5f9; }
-        #loading-screen { position: fixed; inset: 0; background: white; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
-        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; display: inline-block; margin-right: 6px; }
-        .status-online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-        .status-error { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+        .day-column { min-width: 300px; background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; display: flex; flex-direction: column; shrink-0; }
+        .task-card { border-left: 5px solid #3b82f6; background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 8px; position: relative; border: 1px solid #f1f5f9; }
+        #loading-screen { position: fixed; inset: 0; background: white; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="h-screen flex flex-col text-slate-800">
 
-    <!-- 載入動畫層 -->
+    <!-- 載入與診斷畫面 -->
     <div id="loading-screen">
-        <div id="loader-icon" class="animate-spin text-4xl mb-4 text-blue-500">🌀</div>
-        <p id="loader-text" class="font-bold text-slate-500 text-lg">正在嘗試同步雲端資料...</p>
-        <div id="timeout-box" class="mt-8 p-6 bg-amber-50 border border-amber-200 rounded-2xl hidden max-w-sm text-center">
-            <p class="text-amber-700 font-bold mb-2">⚠️ 連線時間過長</p>
-            <p class="text-xs text-amber-600 mb-4">這通常是因為 Firebase 規則 (Rules) 沒開，或是沒有啟用匿名登入。</p>
-            <button onclick="location.reload()" class="bg-amber-600 text-white px-4 py-2 rounded-lg font-bold text-sm">重新嘗試連線</button>
+        <div id="loader-icon" class="animate-spin text-4xl mb-4">🌀</div>
+        <p id="loader-text" class="font-bold text-slate-500">正在嘗試連線 Google 雲端...</p>
+        <div id="error-advice" class="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-xs hidden max-w-sm">
+            <p class="font-bold mb-2">❌ 連線失敗診斷：</p>
+            <div id="error-msg" class="font-mono bg-white p-2 mb-3 border rounded"></div>
+            <p>請檢查：<br>1. Firestore <b>Rules (規則)</b> 是否設為 <code>allow read, write: if true;</code><br>2. 是否已按 <b>「發布」</b><br>3. 資料庫是否為 <b>Native 模式</b></p>
+            <button onclick="location.reload()" class="mt-4 w-full py-2 bg-red-600 text-white rounded font-bold">重新整理網頁</button>
         </div>
     </div>
 
-    <!-- 頁首 -->
-    <header class="bg-slate-900 text-white p-3 shadow-lg flex justify-between items-center h-[70px]">
-        <div class="flex items-center gap-3">
-            <div class="bg-blue-600 p-2 rounded-lg text-xl">☁️</div>
-            <div>
-                <h1 class="font-bold text-lg leading-tight">雲端智慧排程</h1>
-                <div class="flex items-center text-[10px]">
-                    <span id="status-dot" class="status-dot"></span>
-                    <span id="status-text">連線中...</span>
-                </div>
-            </div>
+    <!-- 頂部導航 -->
+    <header class="bg-slate-900 text-white p-3 shadow-lg flex justify-between items-center h-[70px] shrink-0">
+        <div class="flex items-center gap-2">
+            <div class="bg-blue-600 p-1.5 rounded text-xl">🚚</div>
+            <h1 class="font-bold">雲端智慧排程</h1>
         </div>
         <div class="flex gap-2">
             <button onclick="shiftDate(-1)" class="bg-slate-800 px-3 py-1 rounded">◀</button>
             <button onclick="shiftDate(1)" class="bg-slate-800 px-3 py-1 rounded">▶</button>
-            <button onclick="openModal()" class="bg-green-600 px-4 py-2 rounded-lg font-bold shadow text-sm">⚡ 匯入</button>
+            <button onclick="openModal()" class="bg-green-600 px-4 py-1 rounded font-bold text-sm">⚡ 匯入</button>
         </div>
     </header>
 
-    <main class="flex-1 overflow-hidden relative bg-slate-50">
+    <!-- 主內容區 -->
+    <main class="flex-1 overflow-hidden relative">
         <div id="calendar-container"></div>
     </main>
 
     <!-- 匯入視窗 -->
-    <div id="modal-overlay" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-        <div class="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
-            <h3 class="text-xl font-bold mb-4">智慧分流匯入</h3>
+    <div id="modal-overlay" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-lg rounded-2xl p-6 shadow-2xl">
+            <h3 class="text-xl font-bold mb-4">智慧地址匯入</h3>
             <div class="grid grid-cols-2 gap-4 mb-4">
-                <input type="date" id="start-date-input" class="w-full border p-3 rounded-xl bg-slate-50">
-                <select id="daily-limit" class="w-full border p-3 rounded-xl bg-slate-50">
+                <input type="date" id="start-date-input" class="border p-2 rounded-xl bg-slate-50">
+                <select id="daily-limit" class="border p-2 rounded-xl bg-slate-50">
                     <option value="3" selected>每人每日 3 單</option>
                     <option value="4">每人每日 4 單</option>
-                    <option value="5">每人每日 5 單</option>
                 </select>
             </div>
-            <textarea id="import-text" class="w-full h-44 border p-4 rounded-2xl text-sm bg-slate-50 outline-none mb-4" placeholder="貼上多筆地址清單..."></textarea>
+            <textarea id="import-text" class="w-full h-40 border p-4 rounded-xl text-sm bg-slate-50 outline-none mb-4" placeholder="貼上 Line 地址..."></textarea>
             <div class="flex gap-2">
-                <button onclick="closeModal()" class="flex-1 py-3 font-bold text-slate-400">取消</button>
-                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-2xl">開始同步 🚀</button>
+                <button onclick="closeModal()" class="flex-1 py-3 text-slate-400 font-bold">取消</button>
+                <button onclick="runAutoSchedule()" class="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-xl shadow-lg">開始運算同步 🚀</button>
             </div>
         </div>
     </div>
 
     <script>
+        // 使用您的金鑰
         const firebaseConfig = {
             apiKey: "AIzaSyCun0bs243HrcEWlDlXPUAxYsCCqTQwQBE",
             authDomain: "gogogo-c442b.firebaseapp.com",
@@ -95,27 +84,13 @@
         };
 
         // 初始化
-        let db;
         try {
             firebase.initializeApp(firebaseConfig);
-            db = firebase.firestore();
-            const auth = firebase.auth();
-            
-            // 強制執行匿名登入以確保連線穩定
-            auth.signInAnonymously().catch(e => console.error("Auth Error:", e));
+            var db = firebase.firestore();
+            console.log("Firebase Init Success");
         } catch (e) {
-            document.getElementById('loader-text').innerText = "金鑰設定錯誤，請重新確認！";
+            alert("Firebase 初始化失敗: " + e.message);
         }
-
-        // 超時偵測 (8秒)
-        setTimeout(() => {
-            const screen = document.getElementById('loading-screen');
-            if (screen.style.opacity !== '0') {
-                document.getElementById('loader-icon').classList.remove('animate-spin');
-                document.getElementById('timeout-box').classList.remove('hidden');
-                document.getElementById('loader-text').innerText = "連線失敗，請檢查後台設定";
-            }
-        }, 8000);
 
         const MASTERS = [
             { id: 1, name: '陳師傅', keywords: ['水電','漏水','燈','電'], color: 'border-blue-500' },
@@ -130,26 +105,24 @@
 
         window.onload = function() {
             document.getElementById('start-date-input').value = viewStartDate;
-            if(db) {
-                // 實時監聽
-                db.collection("tasks").onSnapshot(snapshot => {
-                    projects = [];
-                    snapshot.forEach(doc => projects.push({ ...doc.data(), docId: doc.id }));
-                    
-                    // 關閉載入畫面
-                    const screen = document.getElementById('loading-screen');
-                    screen.style.opacity = '0';
-                    setTimeout(() => screen.style.display = 'none', 500);
-                    
-                    document.getElementById('status-dot').className = 'status-dot status-online';
-                    document.getElementById('status-text').innerText = "雲端同步中";
-                    renderCalendar();
-                }, err => {
-                    document.getElementById('status-dot').className = 'status-dot status-error';
-                    document.getElementById('status-text').innerText = "權限不足";
-                    alert("連線遭拒：請確認 Firebase Rules 已設為 allow read, write: if true;");
+            
+            // 監聽雲端資料
+            db.collection("tasks").onSnapshot(function(snapshot) {
+                projects = [];
+                snapshot.forEach(function(doc) {
+                    projects.push(Object.assign({ docId: doc.id }, doc.data()));
                 });
-            }
+                
+                // 成功連線，關閉載入畫面
+                document.getElementById('loading-screen').style.display = 'none';
+                renderCalendar();
+            }, function(error) {
+                console.error("連線出錯: ", error);
+                document.getElementById('loader-icon').style.display = 'none';
+                document.getElementById('loader-text').innerText = "連線失敗";
+                document.getElementById('error-advice').classList.remove('hidden');
+                document.getElementById('error-msg').innerText = error.code + ": " + error.message;
+            });
         };
 
         function renderCalendar() {
@@ -158,7 +131,7 @@
             for (let i = 0; i < 5; i++) {
                 const dateStr = addDays(viewStartDate, i);
                 const col = document.createElement('div');
-                col.className = 'day-column shrink-0';
+                col.className = 'day-column';
                 col.innerHTML = `
                     <div class="p-4 border-b bg-slate-50 rounded-t-xl flex justify-between font-bold">
                         <span>${dateStr.slice(5)}</span>
@@ -172,9 +145,51 @@
                     const tasks = projects.filter(p => p.date === dateStr && p.masterId === master.id);
                     if (tasks.length > 0) {
                         const g = document.createElement('div');
-                        g.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 uppercase">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="bg-white border px-2 py-0.5 rounded text-blue-600">導航</button></div>`;
+                        g.innerHTML = `<div class="text-[10px] text-slate-400 font-bold mb-1 ml-1">${master.name} <button onclick="openMap('${dateStr}', ${master.id})" class="text-blue-500 ml-2">導航</button></div>`;
                         tasks.forEach(t => {
                             g.innerHTML += `
                                 <div class="task-card ${master.color}">
-                                    <div class="text-sm font-bold text-slate-800">${t.rawText}</div>
-                                    <button onclick="deleteTask('${t.docId}')" class="absolute top-1 ri
+                                    <div class="text-sm font-bold">${t.rawText}</div>
+                                    <button onclick="deleteTask('${t.docId}')" class="absolute top-1 right-2 text-slate-300">×</button>
+                                </div>`;
+                        });
+                        taskContainer.appendChild(g);
+                    }
+                });
+            }
+        }
+
+        function runAutoSchedule() {
+            const text = document.getElementById('import-text').value;
+            const limit = parseInt(document.getElementById('daily-limit').value);
+            const startD = document.getElementById('start-date-input').value;
+            if (!text.trim()) return;
+            const lines = text.split('\n').filter(l => l.trim() !== '');
+            
+            const batch = db.batch();
+            let temp = JSON.parse(JSON.stringify(projects));
+
+            lines.forEach(line => {
+                let mId = 5;
+                for (let m of MASTERS) { if (m.keywords.some(k => line.includes(k))) { mId = m.id; break; } }
+                let day = 0;
+                while(true) {
+                    const d = addDays(startD, day);
+                    if(temp.filter(p => p.date === d && p.masterId === mId).length < limit) {
+                        const ref = db.collection("tasks").doc();
+                        const t = { rawText: line, masterId: mId, date: d };
+                        batch.set(ref, t);
+                        temp.push(t);
+                        break;
+                    }
+                    day++;
+                    if(day > 30) break;
+                }
+            });
+            batch.commit().then(function() {
+                closeModal();
+                document.getElementById('import-text').value = '';
+            });
+        }
+
+        f
